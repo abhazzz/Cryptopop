@@ -18,8 +18,8 @@ async def heartbeat():
         await asyncio.sleep(60)  # every 1 min
 
 # --- CONFIG ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
+BOT_TOKEN = "8068411290:AAGBIq8MF2V__uKIVh8bYcB6uOX6dJNwPGg"
+CHANNEL_ID = "@Cryptopopprices"
 LIQUIDATION_STREAM = "wss://fstream.binance.com/ws/solusdt@forceOrder"
 TRADE_STREAM = "wss://fstream.binance.com/ws/solusdt@aggTrade"
 
