@@ -158,5 +158,10 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("🛑 Sniper bot stopped manually.")
+    except Exception as e:
+        print(f"🧨 Top-level crash: {e}")
+        while True:
+            time.sleep(10)  # keep process alive for debugging
+
 
 
