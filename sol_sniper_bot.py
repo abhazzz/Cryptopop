@@ -138,19 +138,21 @@ async def monitor_price_movement():
             await asyncio.sleep(60)
 
 # --- MAIN ENTRY ---
-async def main():
+async def safe_run(coro, label):
     try:
-        await asyncio.gather(
-            listen_liquidations(),
-            listen_trades(),
-            monitor_price_movement(),
-            heartbeat()
-        )
-    except asyncio.CancelledError:
-        print("🔌 Shutdown signal received. Cleaning up tasks...")
-        # Do any cleanup here if needed
+        await coro
     except Exception as e:
-        print(f"🔥 Unhandled error in main(): {e}")
+        print(f"🔥 {label} crashed: {e}")
+        while True:
+            await asyncio.sleep(10)  # Prevent VM from exiting
+
+async def main():
+    await asyncio.gather(
+        safe_run(listen_liquidations(), "liquidations"),
+        safe_run(listen_trades(), "trades"),
+        safe_run(monitor_price_movement(), "price monitor"),
+        safe_run(heartbeat(), "heartbeat")
+    )
 
 if __name__ == "__main__":
     try:
