@@ -139,21 +139,22 @@ async def monitor_price_movement():
 
 # --- MAIN ENTRY ---
 async def main():
-    await asyncio.gather(
-        listen_liquidations(),
-        listen_trades(),
-        monitor_price_movement(),
-        heartbeat()  # 👈 add this line
-    )
+    try:
+        await asyncio.gather(
+            listen_liquidations(),
+            listen_trades(),
+            monitor_price_movement(),
+            heartbeat()
+        )
+    except asyncio.CancelledError:
+        print("Cancelled — keeping bot alive")
+        while True:
+            await asyncio.sleep(3600)  # keeps bot from exiting
+    except Exception as e:
+        print(f"Unhandled error: {e}")
+        while True:
+            await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-async def main():
-    await asyncio.gather(
-        listen_liquidations(),
-        listen_trades(),
-        monitor_price_movement(),
-        heartbeat()  # 👈 add this line
-    )
 
