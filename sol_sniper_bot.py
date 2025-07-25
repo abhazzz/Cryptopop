@@ -147,14 +147,16 @@ async def main():
             heartbeat()
         )
     except asyncio.CancelledError:
-        print("Cancelled — keeping bot alive")
-        while True:
-            await asyncio.sleep(3600)  # keeps bot from exiting
+        print("🔌 Shutdown signal received. Cleaning up tasks...")
+        # Do any cleanup here if needed
     except Exception as e:
-        print(f"Unhandled error: {e}")
-        while True:
-            await asyncio.sleep(3600)
+        print(f"🔥 Unhandled error in main(): {e}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        print("💡 Starting sniper bot...")
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("🛑 Sniper bot stopped manually.")
+
 
