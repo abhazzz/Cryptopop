@@ -10,6 +10,13 @@ from datetime import datetime, timedelta
 # --- Load env vars from .env (works locally) ---
 load_dotenv()
 
+import time
+
+async def heartbeat():
+    while True:
+        print("💓 Sniper bot is alive and running...")
+        await asyncio.sleep(60)  # every 1 min
+
 # --- CONFIG ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
@@ -135,8 +142,18 @@ async def main():
     await asyncio.gather(
         listen_liquidations(),
         listen_trades(),
-        monitor_price_movement()
+        monitor_price_movement(),
+        heartbeat()  # 👈 add this line
     )
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+async def main():
+    await asyncio.gather(
+        listen_liquidations(),
+        listen_trades(),
+        monitor_price_movement(),
+        heartbeat()  # 👈 add this line
+    )
+
