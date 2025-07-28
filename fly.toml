@@ -30,12 +30,12 @@ primary_region = 'arn'
   cpu_kind = 'shared'
   cpus = 1
 
-# Restart policy - restart if the bot crashes
-[restart]
+# Restart policy - restart if the bot crashes  
+[[restart]]
   policy = "always"
 
 [experimental]
   auto_rollback = false
 
 [deploy]
-  strategy = "immediate"
+  strategy = "i
