@@ -19,7 +19,7 @@ primary_region = 'arn'
 # Health check using script instead of HTTP
 [[checks]]
   name = "bot-health"
-  type = "script"
+  type = "tcp"
   command = ["python", "-c", "import sys; sys.exit(0)"]
   interval = "30s"
   timeout = "10s"
