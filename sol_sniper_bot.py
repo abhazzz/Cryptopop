@@ -131,7 +131,7 @@ class TradingBot:
             side = order.get('S', '')
 
             if quantity >= self.config.LIQUIDATION_THRESHOLD:
-                emoji = "🔴" if side == "SOLD" else "🟢"
+                emoji = "🔴" if side == "SELL" else "🟢"
                 alert = f"{emoji} Liquidation: {quantity:,.0f} contracts {side.lower()} at ${price:,.2f}"
                 logger.info(alert)
                 await self.send_alert_with_retry(alert)
@@ -285,6 +285,8 @@ async def main():
     try:
         config = TradingBotConfig()
         logger.info("💡 Starting trading bot...")
+        logger.info(f"Bot token: {config.BOT_TOKEN[:10]}...") # Debug line
+        logger.info(f"Channel ID: {config.CHANNEL_ID}")      # Debug line
         
         async with TradingBot(config) as bot:
             # Create all tasks
