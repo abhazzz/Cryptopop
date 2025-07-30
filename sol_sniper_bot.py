@@ -4,6 +4,11 @@ import asyncio
 import logging
 import aiohttp
 import websockets
+import hashlib
+import hmac
+import base64
+import time
+import urllib.parse
 from dotenv import load_dotenv
 from collections import deque
 from datetime import datetime, timedelta
@@ -29,8 +34,23 @@ class TradingBotConfig:
         self.BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
         self.CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@Cryptopopprices")
         
+        # Twitter API credentials
+        self.TWITTER_API_KEY = os.getenv("TWITTER_API_KEY")
+        self.TWITTER_API_SECRET = os.getenv("TWITTER_API_SECRET")
+        self.TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
+        self.TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
+        self.TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
+        
         if not self.BOT_TOKEN:
             raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
+        
+        # Check if Twitter is configured (optional)
+        self.TWITTER_ENABLED = all([
+            self.TWITTER_API_KEY,
+            self.TWITTER_API_SECRET,
+            self.TWITTER_ACCESS_TOKEN,
+            self.TWITTER_ACCESS_TOKEN_SECRET
+        ])
         
         # WebSocket streams
         self.LIQUIDATION_STREAM = "wss://fstream.binance.com/ws/solusdt@forceOrder"
@@ -69,6 +89,17 @@ class TradingBot:
 
     async def send_alert_with_retry(self, text: str) -> bool:
         """Send alert with retry logic and proper error handling"""
+        telegram_success = await self._send_telegram_alert(text)
+        twitter_success = True  # Default to success if Twitter is disabled
+        
+        if self.config.TWITTER_ENABLED:
+            twitter_success = await self._send_twitter_alert(text)
+        
+        # Consider successful if at least one platform succeeds
+        return telegram_success or twitter_success
+
+    async def _send_telegram_alert(self, text: str) -> bool:
+        """Send alert to Telegram"""
         url = f"https://api.telegram.org/bot{self.config.BOT_TOKEN}/sendMessage"
         payload = {
             "chat_id": self.config.CHANNEL_ID,
@@ -80,18 +111,107 @@ class TradingBot:
             try:
                 async with self.session.post(url, json=payload) as response:
                     if response.status == 200:
-                        logger.info(f"Alert sent successfully: {text[:50]}...")
+                        logger.info(f"📱 Telegram alert sent: {text[:50]}...")
                         return True
                     else:
                         logger.warning(f"Telegram API returned status {response.status}")
                         
             except Exception as e:
-                logger.error(f"Attempt {attempt + 1} failed to send alert: {e}")
+                logger.error(f"Telegram attempt {attempt + 1} failed: {e}")
                 if attempt < self.config.MAX_RETRIES - 1:
                     await asyncio.sleep(self.config.RETRY_DELAY * (attempt + 1))
         
-        logger.error(f"Failed to send alert after {self.config.MAX_RETRIES} attempts")
+        logger.error(f"Failed to send Telegram alert after {self.config.MAX_RETRIES} attempts")
         return False
+
+    async def _send_twitter_alert(self, text: str) -> bool:
+        """Send alert to Twitter using API v2"""
+        # Convert Markdown to plain text for Twitter
+        twitter_text = self._convert_to_twitter_format(text)
+        
+        url = "https://api.twitter.com/2/tweets"
+        payload = {"text": twitter_text}
+        
+        for attempt in range(self.config.MAX_RETRIES):
+            try:
+                headers = await self._get_twitter_headers("POST", url, json.dumps(payload))
+                
+                async with self.session.post(url, json=payload, headers=headers) as response:
+                    if response.status in [200, 201]:
+                        logger.info(f"🐦 Twitter alert sent: {twitter_text[:50]}...")
+                        return True
+                    else:
+                        response_text = await response.text()
+                        logger.warning(f"Twitter API returned status {response.status}: {response_text}")
+                        
+            except Exception as e:
+                logger.error(f"Twitter attempt {attempt + 1} failed: {e}")
+                if attempt < self.config.MAX_RETRIES - 1:
+                    await asyncio.sleep(self.config.RETRY_DELAY * (attempt + 1))
+        
+        logger.error(f"Failed to send Twitter alert after {self.config.MAX_RETRIES} attempts")
+        return False
+
+    def _convert_to_twitter_format(self, markdown_text: str) -> str:
+        """Convert Telegram markdown to Twitter-friendly format"""
+        # Remove markdown formatting
+        text = markdown_text.replace("*", "").replace("`", "").replace("_", "")
+        
+        # Replace emojis with hashtags for better engagement
+        text = text.replace("🚀", "🚀 #SOL")
+        text = text.replace("📉", "📉 #SOL")
+        text = text.replace("🟢", "🟢")
+        text = text.replace("🔴", "🔴")
+        
+        # Add relevant hashtags
+        if "Price Alert" in text:
+            text += " #Solana #Crypto #PriceAlert"
+        elif "Liquidation" in text:
+            text += " #Solana #Liquidation #Crypto"
+        elif "Large Trade" in text:
+            text += " #Solana #WhaleAlert #Crypto"
+        
+        # Ensure tweet length is under 280 characters
+        if len(text) > 280:
+            text = text[:276] + "..."
+        
+        return text
+
+    async def _get_twitter_headers(self, method: str, url: str, body: str = "") -> Dict[str, str]:
+        """Generate OAuth 1.0a headers for Twitter API"""
+        oauth_params = {
+            'oauth_consumer_key': self.config.TWITTER_API_KEY,
+            'oauth_token': self.config.TWITTER_ACCESS_TOKEN,
+            'oauth_signature_method': 'HMAC-SHA1',
+            'oauth_timestamp': str(int(time.time())),
+            'oauth_nonce': base64.b64encode(os.urandom(32)).decode('utf-8').rstrip('='),
+            'oauth_version': '1.0'
+        }
+        
+        # Create signature base string
+        params_string = '&'.join([f"{k}={urllib.parse.quote(str(v), safe='')}" 
+                                 for k, v in sorted(oauth_params.items())])
+        
+        base_string = f"{method}&{urllib.parse.quote(url, safe='')}&{urllib.parse.quote(params_string, safe='')}"
+        
+        # Create signing key
+        signing_key = f"{urllib.parse.quote(self.config.TWITTER_API_SECRET, safe='')}&{urllib.parse.quote(self.config.TWITTER_ACCESS_TOKEN_SECRET, safe='')}"
+        
+        # Generate signature
+        signature = base64.b64encode(
+            hmac.new(signing_key.encode(), base_string.encode(), hashlib.sha1).digest()
+        ).decode()
+        
+        oauth_params['oauth_signature'] = signature
+        
+        # Create authorization header
+        auth_header = 'OAuth ' + ', '.join([f'{k}="{urllib.parse.quote(str(v), safe="")}"' 
+                                           for k, v in sorted(oauth_params.items())])
+        
+        return {
+            'Authorization': auth_header,
+            'Content-Type': 'application/json'
+        }
 
     async def connect_websocket_with_retry(self, uri: str, handler_func, label: str):
         """WebSocket connection with exponential backoff retry"""
@@ -328,6 +448,9 @@ async def main():
         logger.info(f"Bot token: {config.BOT_TOKEN[:10]}...") # Debug line
         logger.info(f"Channel ID: {config.CHANNEL_ID}")      # Debug line
         logger.info(f"Price alert threshold: {config.PRICE_ALERT_THRESHOLD}%")
+        logger.info(f"Twitter enabled: {config.TWITTER_ENABLED}")
+        if config.TWITTER_ENABLED:
+            logger.info(f"Twitter API Key: {config.TWITTER_API_KEY[:10]}...")
         
         async with TradingBot(config) as bot:
             # Create all tasks
