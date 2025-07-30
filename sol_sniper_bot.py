@@ -32,7 +32,7 @@ class TradingBotConfig:
     def __init__(self):
         # Use environment variables for sensitive data
         self.BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-        self.CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@Cryptopopprices")
+        self.CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
         
         # Twitter API credentials
         self.TWITTER_API_KEY = os.getenv("TWITTER_API_KEY")
