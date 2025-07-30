@@ -52,7 +52,8 @@ class TradingBot:
         self.config = config
         self.last_alert_time: Optional[datetime] = None
         self.last_alert_price: Optional[float] = None
-        self.price_history = deque(maxlen=200)
+        # Increased history size and store more granular data
+        self.price_history = deque(maxlen=1000)  # ~16 hours of data at 60s intervals
         # Use aiohttp session for better performance
         self.session: Optional[aiohttp.ClientSession] = None
         
@@ -193,7 +194,7 @@ class TradingBot:
         return None
 
     async def monitor_price_movement(self):
-        """Monitor 15-minute price changes"""
+        """Monitor 15-minute price changes - FIXED VERSION"""
         logger.info("📊 Starting price movement monitoring...")
         
         while True:
@@ -207,12 +208,15 @@ class TradingBot:
 
                 now = datetime.utcnow()
                 self.price_history.append((now, current_price))
+                
+                # Log current price for debugging
+                logger.info(f"💰 Current SOL price: ${current_price:.2f}")
 
-                # Improved price change calculation
-                trigger_alert, alert_message = self._check_price_triggers(current_price, now)
+                # Check for price alerts (simplified logic)
+                trigger_alert, alert_message = self._check_price_triggers_fixed(current_price, now)
                 
                 if trigger_alert:
-                    logger.info(alert_message)
+                    logger.info(f"🚨 PRICE ALERT TRIGGERED: {alert_message}")
                     await self.send_alert_with_retry(alert_message)
                     self.last_alert_time = now
                     self.last_alert_price = current_price
@@ -223,45 +227,81 @@ class TradingBot:
                 logger.error(f"Price movement check error: {e}")
                 await asyncio.sleep(60)
 
-    def _check_price_triggers(self, current_price: float, now: datetime) -> Tuple[bool, str]:
-        """Check if price change triggers should fire"""
-        # Get price 15 minutes ago
-        cutoff = now - timedelta(minutes=15)
-        past_prices = [p for t, p in self.price_history if t <= cutoff]
-
-        trigger_from_15min = False
-        trigger_from_last_alert = False
-        reference_price = current_price
-        pct_change = 0.0
-
-        if past_prices:
-            price_15min_ago = past_prices[-1]
-            pct_change_15min = ((current_price - price_15min_ago) / price_15min_ago) * 100
-            trigger_from_15min = abs(pct_change_15min) >= self.config.PRICE_ALERT_THRESHOLD
+    def _check_price_triggers_fixed(self, current_price: float, now: datetime) -> Tuple[bool, str]:
+        """FIXED: Rolling 15-minute window trigger logic"""
+        
+        # Need at least 15 minutes of data for initial comparison
+        if len(self.price_history) < 15:
+            logger.info(f"📈 Building price history... ({len(self.price_history)}/15 minutes)")
+            return False, ""
+        
+        # Determine reference price and time based on recent alerts
+        if self.last_alert_time and self.last_alert_price:
+            time_since_last_alert = (now - self.last_alert_time).total_seconds() / 60
             
-            if trigger_from_15min:
-                reference_price = price_15min_ago
-                pct_change = pct_change_15min
-
-        # Check against last alert if within 15 minutes
-        if (self.last_alert_time and self.last_alert_price and 
-            (now - self.last_alert_time < timedelta(minutes=15))):
-            pct_change_since_alert = ((current_price - self.last_alert_price) / self.last_alert_price) * 100
-            trigger_from_last_alert = abs(pct_change_since_alert) >= self.config.PRICE_ALERT_THRESHOLD
-            
-            if trigger_from_last_alert and not trigger_from_15min:
+            if time_since_last_alert < 15:
+                # Within 15 minutes of LAST alert - compare against that alert price
                 reference_price = self.last_alert_price
-                pct_change = pct_change_since_alert
+                reference_time = self.last_alert_time
+                reference_type = "last alert"
+                logger.info(f"📊 Using last alert price as reference ({time_since_last_alert:.1f}m ago)")
+            else:
+                # More than 15 minutes since LAST alert - reset and use historical price
+                logger.info(f"📊 15+ minutes since last alert ({time_since_last_alert:.1f}m) - resetting to historical comparison")
+                reference_price, reference_time, reference_type = self._get_historical_reference_price(now)
+                # Reset last alert since we're outside the 15-minute window from the LAST alert
+                self.last_alert_price = None
+                self.last_alert_time = None
         else:
-            # Reset reference if no recent alert
-            self.last_alert_price = past_prices[-1] if past_prices else current_price
-
-        if trigger_from_15min or trigger_from_last_alert:
-            arrow = "🚀" if current_price > reference_price else "📉"
-            alert = f"{arrow} SOL Price Alert: {pct_change:.2f}% change\n${reference_price:.2f} → ${current_price:.2f}"
+            # No recent alert - use historical price
+            reference_price, reference_time, reference_type = self._get_historical_reference_price(now)
+        
+        if reference_price is None:
+            return False, ""
+        
+        # Calculate percentage change
+        pct_change = ((current_price - reference_price) / reference_price) * 100
+        minutes_ago = (now - reference_time).total_seconds() / 60
+        
+        # Log the calculation for debugging
+        logger.info(f"📊 Price check: ${reference_price:.2f} ({reference_type}, {minutes_ago:.1f}m ago) → ${current_price:.2f} = {pct_change:+.2f}%")
+        
+        # Trigger alert if change exceeds threshold
+        if abs(pct_change) >= self.config.PRICE_ALERT_THRESHOLD:
+            direction = "🚀" if pct_change > 0 else "📉"
+            alert_type = "from alert" if reference_type == "last alert" else "15min"
+            alert = f"{direction} *SOL Price Alert* ({alert_type})\n"
+            alert += f"`{pct_change:+.2f}%` change in {minutes_ago:.0f} minutes\n"
+            alert += f"${reference_price:.2f} → ${current_price:.2f}"
             return True, alert
             
         return False, ""
+    
+    def _get_historical_reference_price(self, now: datetime) -> Tuple[Optional[float], Optional[datetime], str]:
+        """Get reference price from 15 minutes ago in price history"""
+        # Find price approximately 15 minutes ago (within 2-minute window)
+        cutoff_time = now - timedelta(minutes=15)
+        tolerance = timedelta(minutes=2)
+        
+        # Get prices within the tolerance window around 15 minutes ago
+        reference_prices = [
+            (timestamp, price) for timestamp, price in self.price_history 
+            if abs((timestamp - cutoff_time).total_seconds()) <= tolerance.total_seconds()
+        ]
+        
+        if reference_prices:
+            # Use the closest price to 15 minutes ago
+            reference_time, reference_price = min(reference_prices, key=lambda x: abs((x[0] - cutoff_time).total_seconds()))
+            return reference_price, reference_time, "15min history"
+        else:
+            # Fallback: get the oldest price we have that's at least 10 minutes old
+            min_age = now - timedelta(minutes=10)
+            old_prices = [(t, p) for t, p in self.price_history if t <= min_age]
+            if old_prices:
+                reference_time, reference_price = old_prices[0]  # oldest price
+                return reference_price, reference_time, "oldest available"
+            else:
+                return None, None, "none"
 
     async def heartbeat(self):
         """Heartbeat to show bot is alive"""
@@ -287,6 +327,7 @@ async def main():
         logger.info("💡 Starting trading bot...")
         logger.info(f"Bot token: {config.BOT_TOKEN[:10]}...") # Debug line
         logger.info(f"Channel ID: {config.CHANNEL_ID}")      # Debug line
+        logger.info(f"Price alert threshold: {config.PRICE_ALERT_THRESHOLD}%")
         
         async with TradingBot(config) as bot:
             # Create all tasks
