@@ -4,25 +4,16 @@ primary_region = 'arn'
 
 [build]
 
-# Remove http_service - this is a background worker, not a web app
-# No HTTP service needed
-
 [env]
-  LIQUIDATION_THRESHOLD = "1000000"
-  TRADE_USD_THRESHOLD = "1000000" 
-  PRICE_ALERT_THRESHOLD = "2.0"
 
-# Process configuration for background workers
 [processes]
   app = "python sol_sniper_bot.py"
 
-# VM configuration
 [[vm]]
   memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
 
-# Restart policy - restart if the bot crashes  
 [[restart]]
   policy = "always"
 
