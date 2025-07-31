@@ -114,8 +114,8 @@ class TradingBotConfig:
             telegram_liquidation_threshold=float(os.getenv("SOL_TELEGRAM_LIQUIDATION_THRESHOLD", "1000000")),
             telegram_trade_threshold=float(os.getenv("SOL_TELEGRAM_TRADE_THRESHOLD", "1000000")),
             telegram_price_threshold=float(os.getenv("SOL_TELEGRAM_PRICE_THRESHOLD", "2.0")),
-            twitter_liquidation_threshold=float(os.getenv("SOL_TWITTER_LIQUIDATION_THRESHOLD", "5000000")),
-            twitter_trade_threshold=float(os.getenv("SOL_TWITTER_TRADE_THRESHOLD", "3000000")),
+            twitter_liquidation_threshold=float(os.getenv("SOL_TWITTER_LIQUIDATION_THRESHOLD", "2500000")),
+            twitter_trade_threshold=float(os.getenv("SOL_TWITTER_TRADE_THRESHOLD", "2500000")),
             twitter_price_threshold=float(os.getenv("SOL_TWITTER_PRICE_THRESHOLD", "3.0")),
             coingecko_id='solana'
         )
@@ -127,9 +127,9 @@ class TradingBotConfig:
             telegram_bot_token=os.getenv("HBAR_TELEGRAM_BOT_TOKEN"),
             telegram_channel_id=os.getenv("HBAR_TELEGRAM_CHANNEL_ID"),
             twitter_enabled=os.getenv("HBAR_TWITTER_ENABLED", "false").lower() == "true",
-            telegram_liquidation_threshold=float(os.getenv("HBAR_TELEGRAM_LIQUIDATION_THRESHOLD", "500000")),
-            telegram_trade_threshold=float(os.getenv("HBAR_TELEGRAM_TRADE_THRESHOLD", "500000")),
-            telegram_price_threshold=float(os.getenv("HBAR_TELEGRAM_PRICE_THRESHOLD", "2.0")),
+            telegram_liquidation_threshold=float(os.getenv("HBAR_TELEGRAM_LIQUIDATION_THRESHOLD", "250000")),
+            telegram_trade_threshold=float(os.getenv("HBAR_TELEGRAM_TRADE_THRESHOLD", "250000")),
+            telegram_price_threshold=float(os.getenv("HBAR_TELEGRAM_PRICE_THRESHOLD", "1.0")),
             twitter_liquidation_threshold=float(os.getenv("HBAR_TWITTER_LIQUIDATION_THRESHOLD", "2000000")),
             twitter_trade_threshold=float(os.getenv("HBAR_TWITTER_TRADE_THRESHOLD", "1500000")),
             twitter_price_threshold=float(os.getenv("HBAR_TWITTER_PRICE_THRESHOLD", "3.0")),
@@ -683,6 +683,8 @@ class TradingBot:
             alert += f"`{pct_change:+.2f}%` change in {minutes_ago:.0f} minutes\n"
             alert += f"${reference_price:.2f} → ${current_price:.2f}"
             return True, alert
+            
+        return False, ""
     def _get_historical_reference_price(self, now: datetime, coin_symbol: str) -> Tuple[Optional[float], Optional[datetime], str]:
         """Get reference price from 15 minutes ago in price history for specific coin"""
         coin_data = self.coin_data[coin_symbol]
