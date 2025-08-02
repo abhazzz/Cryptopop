@@ -104,34 +104,34 @@ class TradingBotConfig:
         """Load coin configurations from environment"""
         coins = {}
         
-        # SOL configuration
+        # SOL configuration with updated thresholds
         coins['SOL'] = CoinConfig(
             'SOL',
             name='Solana',
             telegram_bot_token=os.getenv("SOL_TELEGRAM_BOT_TOKEN"),
             telegram_channel_id=os.getenv("SOL_TELEGRAM_CHANNEL_ID"),
             twitter_enabled=os.getenv("SOL_TWITTER_ENABLED", "true").lower() == "true",
-            telegram_liquidation_threshold=float(os.getenv("SOL_TELEGRAM_LIQUIDATION_THRESHOLD", "1000000")),
-            telegram_trade_threshold=float(os.getenv("SOL_TELEGRAM_TRADE_THRESHOLD", "1000000")),
+            telegram_liquidation_threshold=float(os.getenv("SOL_TELEGRAM_LIQUIDATION_THRESHOLD", "500000")),
+            telegram_trade_threshold=float(os.getenv("SOL_TELEGRAM_TRADE_THRESHOLD", "750000")),
             telegram_price_threshold=float(os.getenv("SOL_TELEGRAM_PRICE_THRESHOLD", "2.0")),
-            twitter_liquidation_threshold=float(os.getenv("SOL_TWITTER_LIQUIDATION_THRESHOLD", "2500000")),
-            twitter_trade_threshold=float(os.getenv("SOL_TWITTER_TRADE_THRESHOLD", "2500000")),
+            twitter_liquidation_threshold=float(os.getenv("SOL_TWITTER_LIQUIDATION_THRESHOLD", "2000000")),
+            twitter_trade_threshold=float(os.getenv("SOL_TWITTER_TRADE_THRESHOLD", "2000000")),
             twitter_price_threshold=float(os.getenv("SOL_TWITTER_PRICE_THRESHOLD", "3.0")),
             coingecko_id='solana'
         )
         
-        # HBAR configuration
+        # HBAR configuration with updated thresholds
         coins['HBAR'] = CoinConfig(
             'HBAR',
             name='Hedera',
             telegram_bot_token=os.getenv("HBAR_TELEGRAM_BOT_TOKEN"),
             telegram_channel_id=os.getenv("HBAR_TELEGRAM_CHANNEL_ID"),
             twitter_enabled=os.getenv("HBAR_TWITTER_ENABLED", "false").lower() == "true",
-            telegram_liquidation_threshold=float(os.getenv("HBAR_TELEGRAM_LIQUIDATION_THRESHOLD", "250000")),
-            telegram_trade_threshold=float(os.getenv("HBAR_TELEGRAM_TRADE_THRESHOLD", "250000")),
-            telegram_price_threshold=float(os.getenv("HBAR_TELEGRAM_PRICE_THRESHOLD", "1.0")),
-            twitter_liquidation_threshold=float(os.getenv("HBAR_TWITTER_LIQUIDATION_THRESHOLD", "2000000")),
-            twitter_trade_threshold=float(os.getenv("HBAR_TWITTER_TRADE_THRESHOLD", "1500000")),
+            telegram_liquidation_threshold=float(os.getenv("HBAR_TELEGRAM_LIQUIDATION_THRESHOLD", "100000")),
+            telegram_trade_threshold=float(os.getenv("HBAR_TELEGRAM_TRADE_THRESHOLD", "150000")),
+            telegram_price_threshold=float(os.getenv("HBAR_TELEGRAM_PRICE_THRESHOLD", "1.5")),
+            twitter_liquidation_threshold=float(os.getenv("HBAR_TWITTER_LIQUIDATION_THRESHOLD", "500000")),
+            twitter_trade_threshold=float(os.getenv("HBAR_TWITTER_TRADE_THRESHOLD", "750000")),
             twitter_price_threshold=float(os.getenv("HBAR_TWITTER_PRICE_THRESHOLD", "3.0")),
             coingecko_id='hedera-hashgraph',
             liquidation_stream="wss://fstream.binance.com/ws/hbarusdt@forceOrder",
@@ -519,7 +519,17 @@ class TradingBot:
             # Check Telegram threshold
             if quantity >= coin_config.telegram_liquidation_threshold:
                 emoji = "🔴" if side == "SELL" else "🟢"
-                alert = f"{emoji} {coin_symbol} Liquidation: {quantity:,.0f} contracts {side.lower()} at ${price:,.2f}"
+                
+                # Fix 1: Use past tense "sold/bought" instead of "sell/buy"
+                side_text = "sold" if side == "SELL" else "bought"
+                
+                # Fix 2: Use 4 decimal places for HBAR, 2 for others
+                if coin_symbol == "HBAR":
+                    price_format = f"${price:.4f}"
+                else:
+                    price_format = f"${price:.2f}"
+                
+                alert = f"{emoji} {coin_symbol} Liquidation: {quantity:,.0f} contracts {side_text} at {price_format}"
                 logger.info(alert)
                 
                 # Determine if it meets Twitter threshold
@@ -535,14 +545,21 @@ class TradingBot:
             qty = float(msg['q'])
             price = float(msg['p'])
             usd_value = qty * price
-            side = "BOUGHT" if msg['m'] is False else "SOLD"
+            side = "BOUGHT" if msg['m'] is False else "SOLD"  # Already correct - past tense
             
             coin_config = self.config.coins[coin_symbol]
 
             # Check Telegram threshold
             if usd_value >= coin_config.telegram_trade_threshold:
                 emoji = "🟢" if side == "BOUGHT" else "🔴"
-                alert = f"{emoji} {coin_symbol} Large Trade: {qty:,.2f} contracts {side.lower()} at ${price:,.2f} (${usd_value:,.0f})"
+                
+                # Use 4 decimal places for HBAR, 2 for others
+                if coin_symbol == "HBAR":
+                    price_format = f"${price:.4f}"
+                else:
+                    price_format = f"${price:.2f}"
+                
+                alert = f"{emoji} {coin_symbol} Large Trade: {qty:,.2f} contracts {side.lower()} at {price_format} (${usd_value:,.0f})"
                 logger.info(alert)
                 
                 # Determine priority (lowest for trades)
@@ -614,7 +631,7 @@ class TradingBot:
                     coin_data = self.coin_data[coin_symbol]
                     coin_data['price_history'].append((now, current_price))
                     
-                    logger.info(f"💰 Current {coin_symbol} price: ${current_price:.2f}")
+                    logger.info(f"💰 Current {coin_symbol} price: ${current_price:.4f if coin_symbol == 'HBAR' else current_price:.2f}")
                     
                     # Check for price alerts
                     trigger_alert, alert_message = self._check_price_triggers_fixed(
@@ -673,18 +690,28 @@ class TradingBot:
         minutes_ago = (now - reference_time).total_seconds() / 60
         
         # Log the calculation for debugging
-        logger.info(f"📊 {coin_symbol} price check: ${reference_price:.2f} ({reference_type}, {minutes_ago:.1f}m ago) → ${current_price:.2f} = {pct_change:+.2f}%")
+        logger.info(f"📊 {coin_symbol} price check: ${reference_price:.4f if coin_symbol == 'HBAR' else reference_price:.2f} ({reference_type}, {minutes_ago:.1f}m ago) → ${current_price:.4f if coin_symbol == 'HBAR' else current_price:.2f} = {pct_change:+.2f}%")
         
         # Check against Telegram threshold first
         if abs(pct_change) >= coin_config.telegram_price_threshold:
             direction = "🚀" if pct_change > 0 else "📉"
             alert_type = "from alert" if reference_type == "last alert" else "15min"
+            
+            # Format prices with appropriate decimal places
+            if coin_symbol == "HBAR":
+                ref_price_str = f"${reference_price:.4f}"
+                curr_price_str = f"${current_price:.4f}"
+            else:
+                ref_price_str = f"${reference_price:.2f}"
+                curr_price_str = f"${current_price:.2f}"
+            
             alert = f"{direction} *{coin_symbol} Price Alert* ({alert_type})\n"
             alert += f"`{pct_change:+.2f}%` change in {minutes_ago:.0f} minutes\n"
-            alert += f"${reference_price:.2f} → ${current_price:.2f}"
+            alert += f"{ref_price_str} → {curr_price_str}"
             return True, alert
             
         return False, ""
+        
     def _get_historical_reference_price(self, now: datetime, coin_symbol: str) -> Tuple[Optional[float], Optional[datetime], str]:
         """Get reference price from 15 minutes ago in price history for specific coin"""
         coin_data = self.coin_data[coin_symbol]
