@@ -519,7 +519,17 @@ class TradingBot:
             # Check Telegram threshold
             if quantity >= coin_config.telegram_liquidation_threshold:
                 emoji = "🔴" if side == "SELL" else "🟢"
-                alert = f"{emoji} {coin_symbol} Liquidation: {quantity:,.0f} contracts {side.lower()} at ${price:,.2f}"
+                
+                # Fix 1: Use past tense "sold/bought" instead of "sell/buy"
+                side_text = "sold" if side == "SELL" else "bought"
+                
+                # Fix 2: Use 4 decimal places for HBAR, 2 for others
+                if coin_symbol == "HBAR":
+                    price_format = f"${price:.4f}"
+                else:
+                    price_format = f"${price:.2f}"
+                
+                alert = f"{emoji} {coin_symbol} Liquidation: {quantity:,.0f} contracts {side_text} at {price_format}"
                 logger.info(alert)
                 
                 # Determine if it meets Twitter threshold
@@ -542,7 +552,14 @@ class TradingBot:
             # Check Telegram threshold
             if usd_value >= coin_config.telegram_trade_threshold:
                 emoji = "🟢" if side == "BOUGHT" else "🔴"
-                alert = f"{emoji} {coin_symbol} Large Trade: {qty:,.2f} contracts {side.lower()} at ${price:,.2f} (${usd_value:,.0f})"
+                
+                # Use 4 decimal places for HBAR, 2 for others
+                if coin_symbol == "HBAR":
+                    price_format = f"${price:.4f}"
+                else:
+                    price_format = f"${price:.2f}"
+                
+                alert = f"{emoji} {coin_symbol} Large Trade: {qty:,.2f} contracts {side.lower()} at {price_format} (${usd_value:,.0f})"
                 logger.info(alert)
                 
                 # Determine priority (lowest for trades)
@@ -614,7 +631,13 @@ class TradingBot:
                     coin_data = self.coin_data[coin_symbol]
                     coin_data['price_history'].append((now, current_price))
                     
-                    logger.info(f"💰 Current {coin_symbol} price: ${current_price:.2f}")
+                    # Fixed: Use separate variables for price formatting to avoid f-string issues
+                    if coin_symbol == "HBAR":
+                        price_str = f"${current_price:.4f}"
+                    else:
+                        price_str = f"${current_price:.2f}"
+                    
+                    logger.info(f"💰 Current {coin_symbol} price: {price_str}")
                     
                     # Check for price alerts
                     trigger_alert, alert_message = self._check_price_triggers_fixed(
@@ -672,8 +695,16 @@ class TradingBot:
         pct_change = ((current_price - reference_price) / reference_price) * 100
         minutes_ago = (now - reference_time).total_seconds() / 60
         
+        # Fixed: Use separate variables for price formatting in logs
+        if coin_symbol == "HBAR":
+            ref_price_str = f"${reference_price:.4f}"
+            curr_price_str = f"${current_price:.4f}"
+        else:
+            ref_price_str = f"${reference_price:.2f}"
+            curr_price_str = f"${current_price:.2f}"
+        
         # Log the calculation for debugging
-        logger.info(f"📊 {coin_symbol} price check: ${reference_price:.2f} ({reference_type}, {minutes_ago:.1f}m ago) → ${current_price:.2f} = {pct_change:+.2f}%")
+        logger.info(f"📊 {coin_symbol} price check: {ref_price_str} ({reference_type}, {minutes_ago:.1f}m ago) → {curr_price_str} = {pct_change:+.2f}%")
         
         # Check against Telegram threshold first
         if abs(pct_change) >= coin_config.telegram_price_threshold:
@@ -681,10 +712,11 @@ class TradingBot:
             alert_type = "from alert" if reference_type == "last alert" else "15min"
             alert = f"{direction} *{coin_symbol} Price Alert* ({alert_type})\n"
             alert += f"`{pct_change:+.2f}%` change in {minutes_ago:.0f} minutes\n"
-            alert += f"${reference_price:.2f} → ${current_price:.2f}"
+            alert += f"{ref_price_str} → {curr_price_str}"
             return True, alert
             
         return False, ""
+        
     def _get_historical_reference_price(self, now: datetime, coin_symbol: str) -> Tuple[Optional[float], Optional[datetime], str]:
         """Get reference price from 15 minutes ago in price history for specific coin"""
         coin_data = self.coin_data[coin_symbol]
