@@ -519,13 +519,8 @@ class TradingBot:
             # Check Telegram threshold
             if quantity >= coin_config.telegram_liquidation_threshold:
                 emoji = "🔴" if side == "SELL" else "🟢"
-               side_text = "sold" if side == "SELL" else "bought"
-                if coin_symbol == "HBAR":
-                    price_format = f"${price:.4f}"
-                else:
-                    price_format = f"${price:.2f}"
-                alert = f"{emoji} {coin_symbol} Liquidation: {quantity:,.0f} contracts {side_text} at {price_format}"
-            logger.info(alert)
+                alert = f"{emoji} {coin_symbol} Liquidation: {quantity:,.0f} contracts {side.lower()} at ${price:,.2f}"
+                logger.info(alert)
                 
                 # Determine if it meets Twitter threshold
                 priority = AlertPriority.LIQUIDATION
@@ -547,12 +542,7 @@ class TradingBot:
             # Check Telegram threshold
             if usd_value >= coin_config.telegram_trade_threshold:
                 emoji = "🟢" if side == "BOUGHT" else "🔴"
-                side_text = "sold" if side == "SELL" else "bought"
-                if coin_symbol == "HBAR":
-                     price_format = f"${price:.4f}"
-                else:
-                     price_format = f"${price:.2f}"
-                alert = f"{emoji} {coin_symbol} Large Trade: {qty:,.2f} contracts {side.lower()} at {price_format} (${usd_value:,.0f})"
+                alert = f"{emoji} {coin_symbol} Large Trade: {qty:,.2f} contracts {side.lower()} at ${price:,.2f} (${usd_value:,.0f})"
                 logger.info(alert)
                 
                 # Determine priority (lowest for trades)
