@@ -75,6 +75,10 @@ class TradingBotConfig:
         self.TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
         self.TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
         
+        # Twelve Data API
+        self.TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
+        self.TWELVE_DATA_BASE_URL = "https://api.twelvedata.com"
+        
         # Check if Twitter is configured globally
         self.TWITTER_AVAILABLE = all([
             self.TWITTER_API_KEY,
@@ -255,7 +259,22 @@ class TradingBot:
             self.coin_data[symbol] = {
                 'last_alert_time': None,
                 'last_alert_price': None,
-                'price_history': deque(maxlen=1000)  # ~16 hours of data at 60s intervals
+                'price_history': deque(maxlen=1000),  # ~16 hours of data at 60s intervals
+                'buy_volume_24h': 0.0,
+                'sell_volume_24h': 0.0,
+                'volume_start_time': datetime.utcnow()
+            }
+        
+        # Daily indicators storage
+        self.daily_indicators = {}
+        for symbol in config.coins:
+            self.daily_indicators[symbol] = {
+                'rsi': None,
+                'rsi_yesterday': None,
+                'ema_20': None,
+                'ema_50': None,
+                'ema_200': None,
+                'last_updated': None
             }
         
         # Use aiohttp session for better performance
@@ -548,6 +567,23 @@ class TradingBot:
             side = "BOUGHT" if msg['m'] is False else "SOLD"
             
             coin_config = self.config.coins[coin_symbol]
+            coin_data = self.coin_data[coin_symbol]
+            
+            # Track buy/sell volumes for 24h
+            now = datetime.utcnow()
+            hours_since_start = (now - coin_data['volume_start_time']).total_seconds() / 3600
+            
+            # Reset volumes if more than 24 hours have passed
+            if hours_since_start >= 24:
+                coin_data['buy_volume_24h'] = 0.0
+                coin_data['sell_volume_24h'] = 0.0
+                coin_data['volume_start_time'] = now
+            
+            # Add to appropriate volume counter
+            if side == "BOUGHT":
+                coin_data['buy_volume_24h'] += usd_value
+            else:
+                coin_data['sell_volume_24h'] += usd_value
 
             # Check Telegram threshold
             if usd_value >= coin_config.telegram_trade_threshold:
@@ -745,6 +781,236 @@ class TradingBot:
             else:
                 return None, None, "none"
 
+    async def fetch_twelve_data_indicators(self, coin_symbol: str):
+        """Fetch all indicators for a coin from Twelve Data"""
+        
+        if not self.config.TWELVE_DATA_API_KEY:
+            logger.error("TWELVE_DATA_API_KEY not set")
+            return False
+        
+        try:
+            # Map crypto symbols (Twelve Data uses BTC/USD format)
+            symbol_map = {
+                'SOL': 'SOL/USD',
+                'HBAR': 'HBAR/USD',
+                'BTC': 'BTC/USD',
+                'ETH': 'ETH/USD'
+            }
+            
+            twelve_symbol = symbol_map.get(coin_symbol, f'{coin_symbol}/USD')
+            
+            # Store all results
+            indicators = {}
+            
+            # 1. Fetch RSI (current and yesterday)
+            rsi_url = f"{self.config.TWELVE_DATA_BASE_URL}/rsi"
+            rsi_params = {
+                'symbol': twelve_symbol,
+                'interval': '1day',
+                'time_period': 14,
+                'outputsize': 2,  # Get today and yesterday
+                'apikey': self.config.TWELVE_DATA_API_KEY
+            }
+            
+            async with self.session.get(rsi_url, params=rsi_params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if 'values' in data and len(data['values']) >= 2:
+                        indicators['rsi'] = float(data['values'][0]['rsi'])
+                        indicators['rsi_yesterday'] = float(data['values'][1]['rsi'])
+                        logger.info(f"✅ {coin_symbol} RSI: {indicators['rsi']:.2f}")
+                    else:
+                        logger.error(f"Invalid RSI data for {coin_symbol}")
+                        
+                else:
+                    logger.error(f"RSI fetch failed: {response.status}")
+            
+            # Wait to respect rate limit (12 requests/minute = 5 seconds between)
+            await asyncio.sleep(5)
+            
+            # 2. Fetch EMAs (20, 50, 200)
+            for period in [20, 50, 200]:
+                ema_url = f"{self.config.TWELVE_DATA_BASE_URL}/ema"
+                ema_params = {
+                    'symbol': twelve_symbol,
+                    'interval': '1day',
+                    'time_period': period,
+                    'outputsize': 1,
+                    'apikey': self.config.TWELVE_DATA_API_KEY
+                }
+                
+                async with self.session.get(ema_url, params=ema_params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if 'values' in data and len(data['values']) > 0:
+                            indicators[f'ema_{period}'] = float(data['values'][0]['ema'])
+                            logger.info(f"✅ {coin_symbol} EMA{period}: ${indicators[f'ema_{period}']:.2f}")
+                    else:
+                        logger.error(f"EMA{period} fetch failed: {response.status}")
+                
+                await asyncio.sleep(5)  # Rate limit
+            
+            # 3. Update stored indicators
+            self.daily_indicators[coin_symbol].update({
+                'rsi': indicators.get('rsi'),
+                'rsi_yesterday': indicators.get('rsi_yesterday'),
+                'ema_20': indicators.get('ema_20'),
+                'ema_50': indicators.get('ema_50'),
+                'ema_200': indicators.get('ema_200'),
+                'last_updated': datetime.utcnow()
+            })
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error fetching indicators for {coin_symbol}: {e}")
+            return False
+
+    async def fetch_all_daily_indicators(self):
+        """Fetch indicators for all coins once daily"""
+        logger.info("📊 Fetching daily indicators for all coins...")
+        
+        for coin_symbol in self.config.coins:
+            success = await self.fetch_twelve_data_indicators(coin_symbol)
+            if success:
+                logger.info(f"✅ {coin_symbol} indicators updated")
+            else:
+                logger.error(f"❌ {coin_symbol} indicators failed")
+            
+            # Wait between coins to avoid rate limits
+            if coin_symbol != list(self.config.coins.keys())[-1]:  # Not last coin
+                await asyncio.sleep(5)
+        
+        logger.info("📊 Daily indicators fetch complete")
+
+    def calculate_buy_sell_ratio(self, coin_symbol: str) -> Optional[float]:
+        """Calculate buy/sell ratio if we have 24 hours of data"""
+        coin_data = self.coin_data[coin_symbol]
+        
+        # Check if we have exactly 24 hours of data
+        hours_since_start = (datetime.utcnow() - coin_data['volume_start_time']).total_seconds() / 3600
+        
+        if hours_since_start < 24:
+            return None  # Not enough data - need full 24 hours
+        
+        buy_vol = coin_data['buy_volume_24h']
+        sell_vol = coin_data['sell_volume_24h']
+        
+        # Need minimum volume to calculate meaningful ratio
+        total_vol = buy_vol + sell_vol
+        if total_vol < 100000:  # Less than $100k total volume
+            return None
+        
+        if sell_vol == 0:
+            return float('inf')  # All buys
+        
+        return buy_vol / sell_vol
+
+    async def generate_daily_summary(self, coin_symbol: str) -> str:
+        """Generate daily summary using stored indicators"""
+        
+        # Get current price and daily OHLCV from Binance
+        ticker_url = f"https://api.binance.com/api/v3/ticker/24hr"
+        params = {'symbol': f'{coin_symbol}USDT'}
+        
+        try:
+            async with self.session.get(ticker_url, params=params) as response:
+                if response.status == 200:
+                    ticker = await response.json()
+                    
+                    current_price = float(ticker['lastPrice'])
+                    high_price = float(ticker['highPrice'])
+                    low_price = float(ticker['lowPrice'])
+                    volume = float(ticker['quoteVolume']) / 1e6  # Convert to millions
+                    
+            # Get funding rate from Binance Futures
+            funding_url = f"https://fapi.binance.com/fapi/v1/fundingRate"
+            params = {'symbol': f'{coin_symbol}USDT', 'limit': 1}
+            
+            funding_rate = 0.0
+            async with self.session.get(funding_url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data:
+                        funding_rate = float(data[0]['fundingRate']) * 100  # Convert to percentage
+            
+            # Get stored indicators
+            indicators = self.daily_indicators[coin_symbol]
+            
+            # Format RSI with direction
+            rsi_text = "N/A"
+            if indicators['rsi'] and indicators['rsi_yesterday']:
+                rsi_current = indicators['rsi']
+                rsi_yesterday = indicators['rsi_yesterday']
+                direction = "↑" if rsi_current > rsi_yesterday else "↓" if rsi_current < rsi_yesterday else "→"
+                rsi_text = f"{rsi_current:.1f} ({direction}{rsi_yesterday:.1f} yday)"
+            
+            # Format prices based on coin
+            if coin_symbol == "HBAR":
+                price_fmt = f"${current_price:.4f} | H: ${high_price:.4f} | L: ${low_price:.4f}"
+                ema_fmt = f"20: ${indicators['ema_20']:.4f} | 50: ${indicators['ema_50']:.4f} | 200: ${indicators['ema_200']:.4f}"
+            else:
+                price_fmt = f"${current_price:.2f} | H: ${high_price:.2f} | L: ${low_price:.2f}"
+                ema_fmt = f"20: ${indicators['ema_20']:.2f} | 50: ${indicators['ema_50']:.2f} | 200: ${indicators['ema_200']:.2f}"
+            
+            # Build summary
+            summary = f"""📊 {coin_symbol} Daily Summary | {datetime.utcnow().strftime('%b %d')}
+Price: {price_fmt}
+Volume: ${volume:.1f}M"""
+            
+            # Add buy/sell ratio only if available
+            buy_sell_ratio = self.calculate_buy_sell_ratio(coin_symbol)
+            if buy_sell_ratio is not None:
+                summary += f" | Buy/Sell: {buy_sell_ratio:.1f}"
+            
+            summary += f"""
+RSI: {rsi_text} | Funding: {funding_rate:.3f}%
+EMA: {ema_fmt}"""
+            
+            return summary
+            
+        except Exception as e:
+            logger.error(f"Error generating summary for {coin_symbol}: {e}")
+            return None
+
+    async def daily_summary_scheduler(self):
+        """Fetch indicators and send summary once daily at 8:30 AM UTC"""
+        while True:
+            try:
+                now = datetime.utcnow()
+                
+                # Fetch indicators at 08:15 UTC (15 minutes before summary)
+                indicators_time = now.replace(hour=8, minute=15, second=0, microsecond=0)
+                if now > indicators_time:
+                    indicators_time += timedelta(days=1)
+                
+                seconds_until_indicators = (indicators_time - now).total_seconds()
+                
+                if seconds_until_indicators > 0:
+                    logger.info(f"⏰ Next indicators fetch in {seconds_until_indicators/3600:.1f} hours")
+                    await asyncio.sleep(seconds_until_indicators)
+                    
+                    # Fetch all indicators
+                    await self.fetch_all_daily_indicators()
+                
+                # Wait until 08:30 UTC for summary
+                await asyncio.sleep(900)  # 15 minutes
+                
+                # Send summaries
+                for coin_symbol in self.config.coins:
+                    summary = await self.generate_daily_summary(coin_symbol)
+                    if summary:
+                        coin_config = self.config.coins[coin_symbol]
+                        await self._send_telegram_alert(summary, coin_config)
+                        logger.info(f"✅ Sent {coin_symbol} daily summary")
+                
+                # Wait before next cycle
+                await asyncio.sleep(3600)  # 1 hour
+                
+            except Exception as e:
+                logger.error(f"Daily scheduler error: {e}")
+                await asyncio.sleep(300)
+
     async def heartbeat(self):
         """Heartbeat to show bot is alive"""
         while True:
@@ -791,6 +1057,12 @@ async def main():
             twitter_coins = config.get_twitter_enabled_coins()
             logger.info(f"Twitter enabled for: {', '.join(twitter_coins) if twitter_coins else 'None'}")
         
+        # Log Twelve Data configuration
+        if config.TWELVE_DATA_API_KEY:
+            logger.info(f"Twelve Data API Key: {config.TWELVE_DATA_API_KEY[:10]}...")
+        else:
+            logger.warning("Twelve Data API Key not set - daily summaries will have limited data")
+        
         # Log coin configurations
         logger.info(f"Monitoring {len(config.coins)} coins: {', '.join(config.coins.keys())}")
         for symbol, coin_config in config.coins.items():
@@ -818,6 +1090,7 @@ async def main():
             # Add shared tasks
             tasks.append(safe_task_runner(bot.monitor_price_movement(), "price monitor"))
             tasks.append(safe_task_runner(bot.heartbeat(), "heartbeat"))
+            tasks.append(safe_task_runner(bot.daily_summary_scheduler(), "daily summary"))
             
             # Add Twitter queue processor if enabled
             if config.TWITTER_AVAILABLE:
